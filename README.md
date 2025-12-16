@@ -1,10 +1,10 @@
 # VMware Cloud Director Shadow VM Cleaner
 
-![Application Icon](images/vcd_shadow_cleaner.png){width=20% height=20%}
+![Application Icon](images/vcd_shadow_cleaner_thumb.png)
 
 A cross-platform GUI and CLI application for managing Shadow VMs in VMware Cloud Director. This tool helps identify and clean up orphaned Shadow VMs that may accumulate over time, particularly after vApp template deployments or migrations.
 
-![Delete Confirmation](images/image-3.png){width=60% height=60%}
+![Delete Confirmation](images/image-3.png)
 
 ## Features
 
