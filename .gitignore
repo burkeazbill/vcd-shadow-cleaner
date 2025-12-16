@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.spec
+.Python
+env/
+venv/
+build/
+dist/
+
+# Editor/IDE
+.vscode/
+.idea/
+
+# Logs and databases
+*.log
+*.sqlite3
+
+# Environment variables
+.env
+
+# OS Specific
+.DS_Store
