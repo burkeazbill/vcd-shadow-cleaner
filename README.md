@@ -105,7 +105,7 @@ graph TD
     D --> E;
     E -- Connection Successful --> F[Load Tenants, Catalogs, Datastores];
     E -- Connection Failed --> G[Display Error & Exit];
-    F --> H["User Selects Filters (Tenant, Catalog, Datastore)"];
+    F --> H[User Selects Filters: Tenant -> Catalog -> Datastore];
     H --> I[Scan for Shadow VMs];
     I --> J{Shadow VMs Found?};
     J -- Yes --> K[Display/Print Shadow VMs on the specified Datastore for vAppTemplates found in the selected Catalog];
