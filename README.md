@@ -94,9 +94,34 @@ python vcd_shadow_cleaner.py --cli --server <vcd_host> --token <api_token> \
     python vcd_shadow_cleaner.py --help
     ```
 
+## Workflow
+
+```mermaid
+graph TD
+    A[Start Application] --> B{GUI or CLI?};
+    B -- GUI (Default) --> C[Initialize GUI];
+    B -- CLI (Not Recommended) --> D[Parse CLI Arguments];
+    C --> E{Connect to VCD};
+    D --> E;
+    E -- Connection Successful --> F[Load Tenants, Catalogs, Datastores];
+    E -- Connection Failed --> G[Display Error & Exit];
+    F --> H["User Selects Filters (Tenant, Catalog, Datastore)"];
+    H --> I[Scan for Shadow VMs];
+    I --> J{Shadow VMs Found?};
+    J -- Yes --> K[Display/Print Shadow VMs on the specified Datastore for vAppTemplates found in the selected Catalog];
+    J -- No --> L[Display 'No VMs Found' & Exit];
+    K -- GUI: User Selects VMs --> M["Confirm Deletion (GUI/CLI)"];
+    K -- CLI: User Confirms --> M;
+    M -- Confirmed --> N[Start Deletion Loop];
+    N --> O{Delete VM & Apply 3s delay for Rate Limit};
+    O -- VM Deleted --> N;
+    N -- All VMs Processed --> P[Display Deletion Summary & Exit];
+    M -- Cancelled --> P;
+```
+
 ## License
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
 ## Building Executables (Optional)
 
