@@ -4,6 +4,11 @@
 
 A Python application for managing Shadow VMs in VMware Cloud Director. This tool helps identify and clean up Shadow VMs that may accumulate over time, particularly after datastore re-allocations. It allows you to remove all or select Shadow VMs from a specified datastore.
 
+## WARNING - USE WITH CAUTION
+
+> [!CAUTION]
+> This script is designed to DELETE content from VMware Cloud Director. Deletion will not occur until you click the "Yes" button on the confirmation popup that appears when you click the Cleanup Shadows button. Verify and re-verify before proceeding since the delete will be a permanent action that cannot be undone.
+
 ![Delete Confirmation](images/image-3.png)
 
 ## Features
