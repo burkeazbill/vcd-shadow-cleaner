@@ -5,7 +5,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Running the application
 
 ```bash
-# Activate the virtual environment first
+# Launcher: uses venv/bin/python, works from any directory, passes all flags through
+./run.sh            # e.g. ./run.sh --cli --list-servers
+
+# Or activate the virtual environment first
 source venv/bin/activate
 
 # GUI mode (default)
