@@ -305,3 +305,52 @@ def test_get_catalogs_scoped_to_org_client_side(vsc):
     c = make_client(vsc, {"adminCatalog": paged(recs, honor_filter=False)})
     got = c.get_catalogs("orga")
     assert [x["orgName"] for x in got] == ["OrgA"]
+
+
+# ---- auth errors keep the CloudAPI cause ----
+
+CLOUD = "POST /cloudapi/1.0.0/sessions/provider"
+
+
+def test_cloudapi_401_legacy_405_reports_cloudapi_cause(vsc):
+    c = make_client(vsc, {
+        CLOUD: lambda call: Resp(401, {"message": "Unauthorized"}),
+        "POST /api/sessions": lambda call: Resp(405, {"message": "Method not allowed", "minorErrorCode": "METHOD_NOT_ALLOWED"}),
+    })
+    with pytest.raises(vsc.VCDAuthError) as ei:
+        c.authenticate_with_credentials("admin", "bad")
+    msg = str(ei.value)
+    assert msg.startswith("Login failed: CloudAPI authentication failed: HTTP 401")
+    assert "check the username and password" in msg
+    assert "Legacy /api/sessions is not available" in msg
+    assert "405" not in msg and "{" not in msg
+    assert ei.value.status == 401
+
+
+def test_cloudapi_403_hint(vsc):
+    c = make_client(vsc, {CLOUD: lambda call: Resp(403), "POST /api/sessions": lambda call: Resp(405)})
+    with pytest.raises(vsc.VCDAuthError, match="lacks permission or is locked"):
+        c.authenticate_with_credentials("admin", "pw")
+
+
+def test_cloudapi_401_legacy_401_lists_both(vsc):
+    c = make_client(vsc, {CLOUD: lambda call: Resp(401), "POST /api/sessions": lambda call: Resp(401)})
+    with pytest.raises(vsc.VCDAuthError) as ei:
+        c.authenticate_with_credentials("admin", "bad")
+    msg = str(ei.value)
+    assert "CloudAPI authentication failed: HTTP 401" in msg and "Legacy authentication failed: HTTP 401" in msg
+    assert msg.index("CloudAPI") < msg.index("Legacy")
+
+
+def test_cloudapi_success_never_calls_legacy(vsc):
+    c = make_client(vsc, {CLOUD: lambda call: Resp(200, {}, headers={"X-VMWARE-VCLOUD-ACCESS-TOKEN": "abc"}),
+                          "POST /api/sessions": lambda call: Resp(500)})
+    assert c.authenticate_with_credentials("admin", "pw") is True
+    assert not [x for x in c.session.calls if x.path == "/api/sessions"]
+
+
+def test_error_body_trimmed_to_message_field(vsc):
+    c = make_client(vsc, {"GET": lambda call: Resp(500, {"message": "boom", "stackTrace": "x" * 50})})
+    with pytest.raises(vsc.VCDQueryError) as ei:
+        c._get_json("https://vcd.example/api/x", stage="s", target="t")
+    assert str(ei.value).endswith("HTTP 500: boom")

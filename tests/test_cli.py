@@ -250,3 +250,55 @@ def test_https_server_argument_is_normalized(run_main):
     rc, out, err, s = run_main(argv, routes(EXACT))
     assert rc == 0
     assert all(c.host == "vcd.example" for c in s.calls), [c.prepared for c in s.calls]
+
+
+# ---- auth failure surfaces the CloudAPI cause ----
+
+def test_cli_cloudapi_401_legacy_405_exits_3_with_cloudapi_message(run_main):
+    argv = ["--cli", "--server", "vcd.example", "--user", "admin", "--password", "bad",
+            "--catalog", "Gold", "--datastore", "ds1", "--dry-run", "--json"]
+    rc, out, err, s = run_main(argv, routes(
+        [], **{"POST": lambda call: Resp(405, {"message": "Method not allowed"}),
+               "POST /cloudapi/1.0.0/sessions/provider": lambda call: Resp(401, {"message": "Unauthorized"})}))
+    assert rc == 3
+    msg = json.loads(out)["errors"][0]["message"]
+    assert "HTTP 401" in msg and "check the username and password" in msg
+    assert "HTTP 401" in err and "405" not in err
+
+
+# ---- repeated names ----
+
+DS_TWO = [{"name": "ds1", "href": "https://vcd.example/api/admin/extension/datastore/1", "vcName": "vc1"},
+          {"name": "ds1", "href": "https://vcd.example/api/admin/extension/datastore/2", "vcName": "vc2"}]
+CAT_TWO = [{"name": "Gold", "href": "https://vcd.example/api/catalog/A", "orgName": "OrgA", "org": ORG_A},
+           {"name": "Gold", "href": "https://vcd.example/api/catalog/B", "orgName": "OrgB", "org": ORG_B}]
+
+
+def test_repeated_datastore_name_warns_and_scans_once(run_main):
+    argv = ["--cli", "--server", "vcd.example", "--token", "tok", "--catalog", "Gold",
+            "--datastore", "ds1,ds1,ds1", "--dry-run", "--json"]
+    rc, out, err, s = run_main(argv, routes([], datastore=paged(DS_TWO)))
+    doc = json.loads(out)
+    ws = [w for w in doc["warnings"] if "datastore name 'ds1'" in w]
+    assert len(ws) == 1
+    assert err.count("datastore name 'ds1'") <= 1
+    shadow_q = [c for c in s.of("GET", "adminShadowVM")]
+    assert len(shadow_q) == 2  # one scan per distinct datastore, not per occurrence
+
+
+def test_repeated_catalog_name_warns_and_scans_once(run_main):
+    argv = ["--cli", "--server", "vcd.example", "--token", "tok", "--catalog", "Gold,Gold",
+            "--datastore", "ds1", "--dry-run", "--json"]
+    rc, out, err, s = run_main(argv, routes([], catalogs=CAT_TWO))
+    doc = json.loads(out)
+    assert len([w for w in doc["warnings"] if "catalog name 'Gold'" in w]) == 1
+    tpl_q = s.of("GET", "adminVAppTemplate")
+    assert len(tpl_q) == 2  # once per distinct catalog
+
+
+def test_scan_shadow_vms_dedupes_repeated_names(vsc):
+    from helpers import make_client
+    c = make_client(vsc, {"adminCatalog": paged(CATALOGS), "datastore": paged(DATASTORES),
+                          "adminVAppTemplate": paged(TEMPLATES), "adminShadowVM": paged([])})
+    vsc.scan_shadow_vms(c, ["Gold", "Gold"], ["ds1", "ds1"])
+    assert len(c.session.of("GET", "adminShadowVM")) == 1

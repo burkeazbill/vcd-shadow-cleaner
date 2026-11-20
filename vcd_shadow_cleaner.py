@@ -130,7 +130,15 @@ class VCDError(Exception):
 
 
 class VCDAuthError(VCDError):
-    """Authentication failed (bad credentials, or no access token returned)."""
+    """Authentication failed (bad credentials, or no access token returned).
+
+    not_supported is True when the endpoint itself is absent or disabled on the server
+    (HTTP 404/405/501), as opposed to the server rejecting the credentials.
+    """
+
+    def __init__(self, message: str, *, not_supported: bool = False, **kw):
+        super().__init__(message, **kw)
+        self.not_supported = not_supported
 
 
 class VCDQueryError(VCDError):
@@ -707,6 +715,16 @@ class VCDClient:
         except Exception:
             text = ""
         text = " ".join(str(text).split())
+        # A JSON error body: keep just its "message" field when it has one.
+        if text.startswith("{"):
+            try:
+                data = json.loads(text)
+            except ValueError:
+                data = None
+            if isinstance(data, dict):
+                msg = data.get("message") or data.get("minorErrorCode")
+                if msg:
+                    text = " ".join(str(msg).split())
         return text[:limit]
 
     def _raise_for_status(self, resp, stage: str, target: str) -> None:
@@ -827,17 +845,23 @@ class VCDClient:
         Tries CloudAPI sessions (VCD 10.x+), then legacy /api/sessions. Returns True on
         success; raises VCDAuthError if both fail, VCDQueryError on network errors.
         """
-        failures = []
         try:
             return self._authenticate_cloudapi(username, password, org)
-        except VCDAuthError as e:
-            failures.append(str(e))
+        except VCDAuthError as cloud_err:
+            cloud = cloud_err
         try:
             return self._authenticate_legacy(username, password, org)
-        except VCDAuthError as e:
-            failures.append(str(e))
-        raise VCDAuthError("All authentication methods failed: " + "; ".join(failures), stage="auth",
-                           target="credentials")
+        except VCDAuthError as legacy_err:
+            legacy = legacy_err
+        status = cloud.status if cloud.status is not None else legacy.status
+        hint = {401: " (check the username and password)",
+                403: " (the account lacks permission or is locked)"}.get(cloud.status, "")
+        if legacy.not_supported:
+            msg = (f"Login failed: {cloud}{hint}. "
+                   "Legacy /api/sessions is not available on this server.")
+        else:
+            msg = f"Login failed: {cloud}{hint}; {legacy}"
+        raise VCDAuthError(msg, stage="auth", target="credentials", status=status)
 
     def _authenticate_cloudapi(self, username: str, password: str, org: str = "system") -> bool:
         """
@@ -856,7 +880,9 @@ class VCDClient:
         }
         resp = self._request("POST", uri, stage="auth", target="cloudapi session", headers=headers)
         if resp.status_code >= 400:
-            raise VCDAuthError(f"CloudAPI authentication failed: HTTP {resp.status_code}",
+            snippet = self._body_snippet(resp)
+            raise VCDAuthError(f"CloudAPI authentication failed: HTTP {resp.status_code}"
+                               + (f": {snippet}" if snippet else ""),
                                stage="auth", target="cloudapi session", status=resp.status_code)
         token = (resp.headers or {}).get("X-VMWARE-VCLOUD-ACCESS-TOKEN")
         if not token:
@@ -881,8 +907,14 @@ class VCDClient:
         headers = {"Accept": f"application/*+json;version={self.api_version}"}
         resp = self._request("POST", uri, stage="auth", target="legacy session", headers=headers,
                              auth=(self._auth_user(username, org), password))
+        if resp.status_code in (404, 405, 501):
+            raise VCDAuthError(f"Legacy authentication is not supported on this server: HTTP {resp.status_code}",
+                               stage="auth", target="legacy session", status=resp.status_code,
+                               not_supported=True)
         if resp.status_code in (400, 401, 403):
-            raise VCDAuthError(f"Legacy authentication failed: HTTP {resp.status_code}",
+            snippet = self._body_snippet(resp)
+            raise VCDAuthError(f"Legacy authentication failed: HTTP {resp.status_code}"
+                               + (f": {snippet}" if snippet else ""),
                                stage="auth", target="legacy session", status=resp.status_code)
         self._raise_for_status(resp, "auth", "legacy session")
         token = (resp.headers or {}).get("X-VMWARE-VCLOUD-ACCESS-TOKEN")
@@ -1346,8 +1378,18 @@ def scan_shadow_vms(client: VCDClient, catalogs, datastores, vcd_server: str = "
         catalogs = [catalogs]
     if isinstance(datastores, (str, dict)):
         datastores = [datastores]
-    cat_idents = [c if isinstance(c, dict) else {"name": c} for c in catalogs]
-    ds_idents = [d if isinstance(d, dict) else {"name": d} for d in datastores]
+    def _idents(items):
+        out, seen = [], set()
+        for i in items:
+            ident = i if isinstance(i, dict) else {"name": i}
+            key = ident.get("href") or ("name", ident.get("name"))
+            if key not in seen:
+                seen.add(key)
+                out.append(ident)
+        return out
+
+    cat_idents = _idents(catalogs)
+    ds_idents = _idents(datastores)
 
     result = ScanResult()
 
@@ -1570,11 +1612,19 @@ def _resolve_scope(client: VCDClient, catalog_names: List[str], datastore_names:
                             f"({', '.join(describe(h) for h in hits)}); scanning all of them")
         return hits
 
-    cats, dss = [], []
-    for n in catalog_names:
-        cats.extend(pick(n, catalogs, "catalog", lambda c: f"org {c.get('orgName')}"))
-    for n in datastore_names:
-        dss.extend(pick(n, datastores, "datastore", lambda d: f"vCenter {d.get('vcName') or d.get('vc') or '?'}"))
+    def collect(names, items, kind, describe):
+        out, seen = [], set()
+        for n in dict.fromkeys(names):  # repeated names resolve (and warn) once, order kept
+            for h in pick(n, items, kind, describe):
+                key = h.get("href") or id(h)
+                if key not in seen:
+                    seen.add(key)
+                    out.append(h)
+        return out
+
+    cats = collect(catalog_names, catalogs, "catalog", lambda c: f"org {c.get('orgName')}")
+    dss = collect(datastore_names, datastores, "datastore",
+                  lambda d: f"vCenter {d.get('vcName') or d.get('vc') or '?'}")
     return cats, dss, missing
 
 
@@ -2530,6 +2580,7 @@ def run_gui(build_only: bool = False):
 
             self._status_label = QLabel("")
             self._status_label.setStyleSheet("font-style: italic; color: #aaa;")
+            self._status_label.setWordWrap(True)
             main_layout.addWidget(self._status_label)
 
             # ---- Selection (enabled after connect) ----
